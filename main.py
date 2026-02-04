@@ -129,7 +129,7 @@ async def service_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if query.data == "lavado_normal":
         context.user_data['service'] = "Lavado y secado"
         context.user_data['is_express'] = False
-        await query.edit_message_text("✅ Servicio seleccionado: *Lavado y secado*\n\nIndica la cantidad aproximada de prendas:", parse_mode='Markdown')
+        await query.edit_message_text("✅ Servicio seleccionado: *Lavado y secado*\n\nIndica la cantidad aproximada de bolsas:", parse_mode='Markdown')
         return QUANTITY
     elif query.data == "express_check":
         warning_msg = (
@@ -373,7 +373,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if action == "recibido":
         pedido['status'] = "Recibido en Lavandería"
-        msg_to_client = f"📢 Hola {client_name}, tu orden #{ticket_id} ha sido **RECIBIDA** en nuestras instalaciones. Empezamos a trabajar en ella."
+        msg_to_client = f"📢 Hola {client_name}, tu orden #{ticket_id} ha sido **RECIBIDA** en por nuestros administradores, nos pondremos de acuerdo para la recogida."
         msg_to_admin = f"✅ Pedido #{ticket_id} marcado como RECIBIDO."
         
     elif action == "lista":
