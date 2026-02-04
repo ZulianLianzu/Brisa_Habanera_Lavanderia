@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -18,196 +18,262 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# --- Estados de la Conversación ---
-SERVICE, QUANTITY, NAME, PHONE, ADDRESS = range(5)
+# --- CONFIGURACIÓN Y DATOS ---
 
-# --- Teclados (Keyboards) ---
-def get_main_menu_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("🧺 Solicitar servicio", callback_data="solicitar")],
-        [InlineKeyboardButton("📋 Ver precios", callback_data="precios")],
-        [InlineKeyboardButton("📞 Contacto", callback_data="contacto")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# Aquí debes poner el ID numérico del administrador. 
+# Para saberlo, el administrador debe usar el comando /mi_id en el bot.
+ADMIN_CHAT_ID = "52946005"  # <--- AQUÍ VA EL ID DEL ADMIN (Ejemplo: 123456789)
+
+# Precios Base (Extraídos de tu tabla)
+# Estos son los precios para servicio normal (Lavado y Secado)
+PRECIO_ZONA = {
+    "Centro Habana": 720,
+    "Vedado (hasta Paseo)": 780,
+    "Vedado (después de Paseo)": 840,
+    "Habana Vieja": 660,
+    "Cerro": 600,
+    "Nuevo Vedado": 840,
+    "Playa (Puente de Hierro – Calle 60)": 1000,
+    "Playa (Calle 60 – Paradero)": 1000,
+    "Siboney": 1000,
+    "Jaimanita": 1000,
+    "Santa Fe": 1000,
+    "Marianao (ITM)": 960,
+    "Marianao (100 y 51)": 1000,
+    "Boyeros (Aeropuerto)": 600,
+    "Arroyo Naranjo (Los Pinos)": 300,
+    "Arroyo Naranjo (Mantilla)": 360,
+    "Arroyo Naranjo (Calvario)": 480,
+    "Arroyo Naranjo (Eléctrico)": 540,
+    "Diez de Octubre (Santo Suárez)": 420,
+    "Diez de Octubre (Lawton)": 540,
+    "San Miguel del Padrón (Virgen del Camino)": 720,
+    "Cotorro (Puente)": 900,
+    "Habana del Este (Regla)": 780,
+    "Habana del Este (Guanabo)": 1000, # Base 2100 pero tope 1000 según tabla
+    "Alamar (Zonas 9–11)": 1000, # Base 1080 pero tope 1000 según tabla
+}
+
+# --- Estados de la Conversación ---
+LOCATION, SERVICE_TYPE, EXPRESS_CONFIRM, QUANTITY, NAME, PHONE, ADDRESS = range(7)
+
+# --- Generadores de Teclado ---
+
+def get_location_keyboard():
+    """Crea un teclado con las zonas ordenadas."""
+    zonas = list(PRECIO_ZONA.keys())
+    # Agrupamos en listas de 2 para que se vea ordenado
+    chunks = [zonas[i:i + 2] for i in range(0, len(zonas), 2)]
+    # Agregamos botón de cancelar al final
+    chunks.append(["❌ Cancelar pedido"])
+    return ReplyKeyboardMarkup(chunks, resize_keyboard=True, one_time_keyboard=True)
 
 def get_services_keyboard():
     keyboard = [
-        [InlineKeyboardButton("Lavado y secado", callback_data="lavado_secado")],
-        [InlineKeyboardButton("Servicio exprés", callback_data="express")]
+        [InlineKeyboardButton("🧺 Lavado y secado (Normal)", callback_data="lavado_normal")],
+        [InlineKeyboardButton("⚡ Servicio exprés", callback_data="express_check")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# --- Manejadores de Comandos y Flujo ---
+def get_confirm_express_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("✅ Sí, continuar (+50%)", callback_data="express_yes")],
+        [InlineKeyboardButton("❌ No, cancelar", callback_data="cancel_flow")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# --- Manejadores de Flujo ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Bienvenida inicial y menú principal."""
-    welcome_message = (
+    """Bienvenida y selección de Zona."""
+    welcome_msg = (
         "¡Bienvenido a Brisa Habanera! 🌬️\n\n"
-        "Tu ropa limpia y fresca sin complicaciones. "
-        "Selecciona una opción para comenzar."
+        "Primero, necesitamos saber **tu ubicación** para asignar el servicio. "
+        "Selecciona tu zona del menú inferior:"
     )
-    await update.message.reply_text(
-        welcome_message,
-        reply_markup=get_main_menu_keyboard()
-    )
-    return ConversationHandler.END
+    await update.message.reply_text(welcome_msg, reply_markup=get_location_keyboard())
+    return LOCATION
 
-async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Maneja la navegación desde los botones del menú principal."""
-    query = update.callback_query
-    await query.answer()
+async def location_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Guarda la zona y pregunta el servicio."""
+    user_text = update.message.text
 
-    if query.data == "solicitar":
-        # Iniciar flujo de pedido
-        services_message = "Selecciona el tipo de servicio que deseas:"
-        await query.edit_message_text(
-            services_message,
+    if user_text == "❌ Cancelar pedido":
+        return await cancel(update, context)
+    
+    # Verificar si la zona existe en nuestra lista
+    if user_text in PRECIO_ZONA:
+        context.user_data['location'] = user_text
+        
+        service_msg = (
+            f"📍 Zona seleccionada: *{user_text}*\n\n"
+            "Ahora selecciona el tipo de servicio:"
+        )
+        await update.message.reply_text(
+            service_msg, 
+            parse_mode='Markdown', 
             reply_markup=get_services_keyboard()
         )
-        return SERVICE
-    
-    elif query.data == "precios":
-        prices_text = (
-            "📋 **Lista de Precios:**\n\n"
-            "• Lavado y secado: $X por libra/kilo\n"
-            "• Servicio exprés: $Y (Entrega en 24h)\n\n"
-            "¿Te gustaría solicitar un servicio?"
+        return SERVICE_TYPE
+    else:
+        await update.message.reply_text(
+            "❌ Por favor, selecciona una zona válida del menú.",
+            reply_markup=get_location_keyboard()
         )
-        # Volvemos a mostrar el menú principal para que puedan actuar
-        await query.edit_message_text(prices_text, reply_markup=get_main_menu_keyboard())
-        return ConversationHandler.END
-
-    elif query.data == "contacto":
-        contact_text = (
-            "📞 **Información de Contacto:**\n\n"
-            "📍 Dirección: La Habana, Cuba\n"
-            "📧 Email: contacto@brisahabanera.com\n"
-            "📱 Teléfono: +53 555-0000\n\n"
-            "Estamos para servirte. 🌬️"
-        )
-        await query.edit_message_text(contact_text, reply_markup=get_main_menu_keyboard())
-        return ConversationHandler.END
+        return LOCATION
 
 async def service_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Guarda el servicio seleccionado y pide cantidad."""
+    """Maneja la selección de servicio."""
     query = update.callback_query
     await query.answer()
-    
-    service_name = "Lavado y secado" if query.data == "lavado_secado" else "Servicio exprés"
-    context.user_data['service'] = service_name
-    
-    await query.edit_message_text(
-        f"✅ Servicio seleccionado: *{service_name}*\n\n"
-        "Indica la cantidad aproximada de prendas (ej: 5, 10, una bolsa):",
-        parse_mode='Markdown'
-    )
-    return QUANTITY
+
+    if query.data == "lavado_normal":
+        context.user_data['service'] = "Lavado y secado"
+        context.user_data['is_express'] = False
+        await query.edit_message_text("✅ Servicio seleccionado: *Lavado y secado*\n\nIndica la cantidad aproximada de prendas:", parse_mode='Markdown')
+        return QUANTITY
+
+    elif query.data == "express_check":
+        # Mostrar advertencia de Express
+        warning_msg = (
+            "⚠️ **ADVERTENCIA SERVICIO EXPRÉS** ⚠️\n\n"
+            "El servicio exprés tiene un **recargo adicional del 50%** sobre el valor del trayecto por zona.\n\n"
+            "¿Estás de acuerdo y deseas continuar?"
+        )
+        await query.edit_message_text(warning_msg, reply_markup=get_confirm_express_keyboard())
+        return EXPRESS_CONFIRM
+
+async def express_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Maneja la confirmación del servicio exprés."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "express_yes":
+        context.user_data['service'] = "Servicio exprés"
+        context.user_data['is_express'] = True
+        await query.edit_message_text(
+            "⚡ Servicio seleccionado: *Servicio exprés* (Recargo 50% aplicado)\n\nIndica la cantidad aproximada de prendas:",
+            parse_mode='Markdown'
+        )
+        return QUANTITY
+    elif query.data == "cancel_flow":
+        # Volver al inicio
+        await query.edit_message_text("Pedido cancelado. Selecciona una zona para comenzar de nuevo.", reply_markup=get_location_keyboard())
+        return LOCATION
 
 async def quantity_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Guarda la cantidad y pide el nombre."""
-    quantity = update.message.text
-    context.user_data['quantity'] = quantity
-    
-    await update.message.reply_text("Perfecto. Ahora, por favor, escribe tu **Nombre completo**:")
+    """Guarda cantidad y pide nombre."""
+    context.user_data['quantity'] = update.message.text
+    await update.message.reply_text("Perfecto. 📝 Escribe tu **Nombre completo**:")
     return NAME
 
 async def name_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Guarda el nombre y pide el teléfono."""
-    name = update.message.text
-    context.user_data['name'] = name
-    
-    await update.message.reply_text(
-        f"Gracias, {name}. 📝\n\n"
-        "Proporciona tu **Número de teléfono** (con código de país si es posible):"
-    )
+    """Guarda nombre y pide teléfono."""
+    context.user_data['name'] = update.message.text
+    await update.message.reply_text("Gracias. 📱 Escribe tu **Número de teléfono**:")
     return PHONE
 
 async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Guarda el teléfono y pide la dirección."""
-    phone = update.message.text
-    context.user_data['phone'] = phone
-    
-    await update.message.reply_text(
-        "Excelente. 📍\n\n"
-        "Por último, escribe tu **Dirección completa**:\n"
-        "(Calle, número, apto, barrio y referencia cercana)"
-    )
+    """Guarda teléfono y pide dirección."""
+    context.user_data['phone'] = update.message.text
+    await update.message.reply_text("📍 Por último, escribe tu **Dirección completa** (Calle, #, Apto, Ref):")
     return ADDRESS
 
 async def address_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Genera el boleto final y termina la conversación."""
+    """Calcula precio, genera boleto, envía a usuario y admin."""
     address = update.message.text
     context.user_data['address'] = address
     
-    # Recuperar datos
-    data = context.user_data
-    name = data.get('name', 'Cliente')
-    service = data.get('service', 'General')
-    quantity = data.get('quantity', '0')
+    # --- CÁLCULO DE PRECIO ---
+    location = context.user_data.get('location')
+    base_price = PRECIO_ZONA.get(location, 0)
     
-    # Fecha actual
+    is_express = context.user_data.get('is_express', False)
+    service_name = context.user_data.get('service', 'General')
+    
+    final_price = base_price
+    if is_express:
+        final_price = int(base_price * 1.5)
+    
+    price_formatted = "{:,} CUP".format(final_price).replace(",", ".")
+
+    # --- GENERACIÓN BOLETO ---
+    user_data = context.user_data
     date_str = datetime.now().strftime("%d/%m/%Y %H:%M")
     
-    # Crear Boleto
     ticket_text = (
-        f"🧾 *Boleto de servicio - Brisa Habanera*\n\n"
-        f"👤 *Cliente:* {name}\n"
-        f"📱 *Teléfono:* {data.get('phone')}\n"
+        f"🧾 *BOLETO DE SERVICIO - BRISA HABANERA*\n"
+        f"---------------------------------\n"
+        f"👤 *Cliente:* {user_data.get('name')}\n"
+        f"📱 *Teléfono:* {user_data.get('phone')}\n"
         f"📍 *Dirección:* {address}\n"
-        f"🧼 *Servicio:* {service}\n"
-        f"🧺 *Cantidad:* {quantity}\n"
+        f"🏙️ *Zona:* {location}\n"
+        f"🧼 *Servicio:* {service_name}\n"
+        f"🧺 *Cantidad:* {user_data.get('quantity')} prendas\n"
+        f"💰 *TOTAL A PAGAR:* {price_formatted}\n"
         f"📅 *Fecha:* {date_str}\n"
         f"🔄 *Estado:* Pendiente de recogida"
     )
+
+    # 1. Enviar al Cliente
+    await update.message.reply_text(ticket_text, parse_mode='Markdown')
     
-    final_message = (
-        f"{ticket_text}\n\n"
-        f"¡Gracias {name}! Tu pedido ha sido registrado. "
-        f"Nuestro equipo pasará a recoger tu ropa según disponibilidad. "
-        f"Te contactaremos al número proporcionado."
+    thanks_msg = (
+        f"¡Gracias {user_data.get('name')}! Tu pedido ha sido registrado. "
+        f"El equipo de Brisa Habanera te contactará pronto."
     )
-    
-    # Enviar el boleto y limpiar datos
-    await update.message.reply_text(final_message, parse_mode='Markdown')
-    
-    # Opcional: Limpiar datos del usuario para privacidad
+    await update.message.reply_text(thanks_msg, reply_markup=get_location_keyboard())
+
+    # 2. Enviar al Administrador
+    try:
+        # Nota: ADMIN_CHAT_ID debe ser un número (int) o string válido del ID del usuario.
+        # Si pusiste el teléfono +53... en la variable arriba, esto fallará.
+        # Revisa la nota al inicio del código.
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID, 
+            text=f"🔔 **NUEVO PEDIDO RECIBIDO** 🔔\n\n{ticket_text}",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logging.error(f"Error enviando mensaje al admin: {e}")
+
+    # Limpiar datos para privacidad
     context.user_data.clear()
-    
-    # Mostrar menú principal de nuevo
-    await update.message.reply_text(
-        "¿Deseas realizar algo más?",
-        reply_markup=get_main_menu_keyboard()
-    )
-    
-    return ConversationHandler.END
+    return LOCATION
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancela la conversación y vuelve al inicio."""
+    """Cancela la conversación."""
     await update.message.reply_text(
-        "Operación cancelada. Si necesitas ayuda, escribe /start.",
-        reply_markup=get_main_menu_keyboard()
+        "Operación cancelada. Usa /start para comenzar de nuevo.",
+        reply_markup=get_location_keyboard()
     )
     return ConversationHandler.END
+
+# --- COMANDO DE UTILIDAD PARA EL ADMIN ---
+async def get_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """El admin usa este comando para saber su ID numérico."""
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"Tu ID de Telegram es: `{chat_id}`\nCopia este número y pégalo en el código como ADMIN_CHAT_ID.", parse_mode='Markdown')
 
 # --- Configuración Principal ---
 
 def main() -> None:
-    # Obtener Token de las Variables de Entorno
     TOKEN = os.environ.get("TELEGRAM_TOKEN")
     PORT = int(os.environ.get("PORT", 8443))
     
     if not TOKEN:
-        logging.error("No se encontró la variable de entorno TELEGRAM_TOKEN.")
+        logging.error("No se encontró TELEGRAM_TOKEN.")
         return
 
-    # Crear la Aplicación
     application = Application.builder().token(TOKEN).build()
 
-    # Manejador de Conversación para el flujo de pedido
+    # Manejador de Conversación Completo
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(main_menu_handler, pattern='^solicitar$')],
+        entry_points=[CommandHandler("start", start)],
         states={
-            SERVICE: [CallbackQueryHandler(service_selected)],
+            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, location_selected)],
+            SERVICE_TYPE: [CallbackQueryHandler(service_selected)],
+            EXPRESS_CONFIRM: [CallbackQueryHandler(express_confirmed)],
             QUANTITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, quantity_received)],
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name_received)],
             PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone_received)],
@@ -216,20 +282,14 @@ def main() -> None:
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Registrar handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(main_menu_handler, pattern='^(precios|contacto)$'))
     application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("mi_id", get_my_id))
 
-    # Configurar Webhook para Render
-    # Render asigna automáticamente una URL. Usamos una ruta relativa.
-    webhook_url = os.environ.get("RENDER_EXTERNAL_URL") + "/webhook"
-    
-    # En producción, establecer el webhook
+    # Configurar Webhook
     if os.environ.get("RENDER_EXTERNAL_URL"):
+        webhook_url = os.environ.get("RENDER_EXTERNAL_URL") + "/webhook"
         application.bot.set_webhook(url=webhook_url)
     
-    # Iniciar el servidor
     logging.info("Iniciando bot...")
     application.run_webhook(
         listen="0.0.0.0",
