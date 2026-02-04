@@ -22,7 +22,7 @@ logging.basicConfig(
 
 # Aquí debes poner el ID numérico del administrador. 
 # Para saberlo, el administrador debe usar el comando /mi_id en el bot.
-ADMIN_CHAT_ID = "52946005"  # <--- AQUÍ VA EL ID DEL ADMIN (Ejemplo: 123456789)
+ADMIN_CHAT_ID = 8242379333  # <--- AQUÍ VA EL ID DEL ADMIN (Ejemplo: 123456789)
 
 # Precios Base (Extraídos de tu tabla)
 # Estos son los precios para servicio normal (Lavado y Secado)
