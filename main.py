@@ -253,7 +253,7 @@ async def process_confirmation(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🏙️ *Zona:* {location}\n"
             f"🧼 *Servicio:* {user_data.get('service')}\n"
             f"🧺 *Cantidad:* {user_data.get('quantity')} prendas\n"
-            f"💰 *Mensageria:* {price_formatted}\n"
+            f"💰 *Mensajería:* {price_formatted}\n"
             f"📅 *Fecha:* {date_str}\n"
             f"🔄 *Estado:* Pendiente de recogida"
         )
