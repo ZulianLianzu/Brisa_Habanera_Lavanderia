@@ -149,7 +149,7 @@ async def express_confirmed(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data['service'] = "Servicio exprés"
         context.user_data['is_express'] = True
         await query.edit_message_text(
-            "⚡ Servicio seleccionado: *Servicio exprés* (Recargo 50% aplicado)\n\nIndica la cantidad aproximada de prendas:",
+            "⚡ Servicio seleccionado: *Servicio exprés* (Recargo 50% aplicado)\n\nIndica la cantidad aproximada de bolsas:",
             parse_mode='Markdown'
         )
         return QUANTITY
