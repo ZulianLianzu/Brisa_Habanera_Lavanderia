@@ -1,15 +1,3 @@
-
-
-Aquí tienes el código reescrito. He implementado la lógica para que, cuando el administrador marque el pedido como "Recibido" (o "Lista" o "Entregado"), el bot elimine todos los mensajes anteriores de la conversación con el cliente (los de las preguntas y la confirmación), dejando visible únicamente el **Boleto Final** y el **Nuevo Mensaje de Estado**.
-
-### Cambios principales realizados:
-1.  **Rastreo de Mensajes**: El bot guarda ahora el ID de cada mensaje que envía al cliente durante el proceso de pedido (Bienvenida, preguntas, etc.).
-2.  **Limpieza de Chat**: Cuando el administrador actualiza el estado, el bot recorre la lista de IDs guardados y los borra uno a uno.
-3.  **Preservación del Boleto**: Se asegura de que el mensaje del boleto final **NO** se borre.
-
-### Archivo: `main.py`
-
-```python
 import os
 import logging
 import uuid
@@ -498,4 +486,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-```
