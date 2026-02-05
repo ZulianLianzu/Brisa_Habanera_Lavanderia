@@ -1,6 +1,7 @@
 import os
 import logging
 import uuid
+import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -24,8 +25,7 @@ logging.basicConfig(
 # ID del Administrador (CAMBIAR ESTO)
 ADMIN_CHAT_ID = 8242379333 
 
-# Base de datos simulada en memoria para guardar los pedidos activos
-# Estructura: { ticket_id: { 'user_id': 123, 'name': 'Juan', 'delete_ids': [id1, id2...], 'ticket_msg_id': id_ticket, ... } }
+# Base de datos simulada en memoria
 pedidos_db = {}
 
 # Precios Base
@@ -134,7 +134,6 @@ async def service_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if query.data == "lavado_normal":
         context.user_data['service'] = "Lavado y secado"
         context.user_data['is_express'] = False
-        # NO agregamos el mensaje editado a la lista de borrar aquí, lo haremos en confirm
         await query.edit_message_text("✅ Servicio seleccionado: *Lavado y secado*\n\nIndica la cantidad aproximada de bolsas:", parse_mode='Markdown')
         return QUANTITY
     elif query.data == "express_check":
@@ -186,7 +185,6 @@ async def address_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     address = update.message.text
     context.user_data['address'] = address
     
-    # --- CÁLCULO DE PRECIO ---
     location = context.user_data.get('location')
     base_price = PRECIO_ZONA.get(location, 0)
     is_express = context.user_data.get('is_express', False)
@@ -198,7 +196,6 @@ async def address_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data['final_price'] = final_price
     price_formatted = "{:,} CUP".format(final_price).replace(",", ".")
 
-    # --- PRE-BOLETO ---
     pre_ticket_text = (
         f"🔍 *VERIFICACIÓN DE DATOS*\n\n"
         f"📍 Dirección: {address}\n"
@@ -216,13 +213,11 @@ async def address_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return CONFIRM_PRE_TICKET
 
 async def process_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Genera el boleto final, lo guarda en DB, envía a admin y marca mensajes para limpiar."""
+    """Genera el boleto final, lo guarda en DB y envía a admin."""
     query = update.callback_query
     await query.answer()
 
     if query.data == "confirm_no_address":
-        # Volver a pedir dirección
-        # Borramos el mensaje del pre-boleto para limpiar
         context.user_data['delete_ids'].append(query.message.message_id)
         await query.edit_message_text("Por favor, escribe nuevamente tu **Dirección completa**:")
         return ADDRESS
@@ -239,9 +234,8 @@ async def process_confirmation(update: Update, context: ContextTypes.DEFAULT_TYP
         date_str = datetime.now().strftime("%d/%m/%Y %H:%M")
         user_id = update.effective_user.id
 
-        # 3. Preparar lista de IDs a borrar (incluyendo el mensaje del pre-boleto)
+        # 3. Preparar lista de IDs a borrar
         ids_to_delete = user_data.get('delete_ids', [])
-        # Agregamos el ID del mensaje de pre-boleto que acabamos de editar
         ids_to_delete.append(query.message.message_id)
 
         # 4. Formatear Boleto Final
@@ -260,14 +254,12 @@ async def process_confirmation(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🔄 *Estado:* Pendiente de recogida"
         )
 
-        # 5. Borrar el mensaje de pre-boleto y botones antes de enviar el boleto
-        # Esto deja el chat más limpio desde el inicio
         try:
             await query.edit_message_text("Generando tu boleto...")
         except:
             pass
 
-        # 6. Enviar Boleto Final al Cliente
+        # 5. Enviar Boleto Final al Cliente
         ticket_msg = await context.bot.send_message(chat_id=user_id, text=ticket_text, parse_mode='Markdown')
         
         thanks_msg = (
@@ -275,11 +267,9 @@ async def process_confirmation(update: Update, context: ContextTypes.DEFAULT_TYP
             f"El equipo de Brisa Habanera te contactará pronto."
         )
         thanks_msg_obj = await context.bot.send_message(chat_id=user_id, text=thanks_msg, reply_markup=get_location_keyboard())
-        
-        # Agregamos el mensaje de "Gracias" a la lista para que también se borre
         ids_to_delete.append(thanks_msg_obj.message_id)
 
-        # 7. Guardar en Base de Datos Simulada
+        # 6. Guardar en BD
         pedidos_db[ticket_id] = {
             'ticket_id': ticket_id,
             'user_id': user_id,
@@ -291,34 +281,28 @@ async def process_confirmation(update: Update, context: ContextTypes.DEFAULT_TYP
             'quantity': user_data.get('quantity'),
             'price': price_formatted,
             'status': 'Pendiente de recogida',
-            # Claves importantes para la limpieza:
-            'delete_ids': ids_to_delete,          # Lista de mensajes chat que se borrarán
-            'ticket_msg_id': ticket_msg.message_id # ID del boleto (NO borrar este)
+            'delete_ids': ids_to_delete,
+            'ticket_msg_id': ticket_msg.message_id
         }
 
-        # 8. Enviar al Administrador (con opciones de gestión)
-        admin_msg = (
-            f"🔔 **NUEVO PEDIDO RECIBIDO** 🔔\n\n"
-            f"{ticket_text}"
-        )
+        # 7. Enviar al Admin
+        admin_msg = f"🔔 **NUEVO PEDIDO RECIBIDO** 🔔\n\n{ticket_text}"
         admin_keyboard = [
             [InlineKeyboardButton("✅ Recibido", callback_data=f"adm_{ticket_id}_recibido")],
             [InlineKeyboardButton("👕 Ropa Lista", callback_data=f"adm_{ticket_id}_lista")],
             [InlineKeyboardButton("🏠 Entregado", callback_data=f"adm_{ticket_id}_entregado")]
         ]
-        reply_markup_admin = InlineKeyboardMarkup(admin_keyboard)
-
+        
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_CHAT_ID, 
                 text=admin_msg,
                 parse_mode='Markdown',
-                reply_markup=reply_markup_admin
+                reply_markup=InlineKeyboardMarkup(admin_keyboard)
             )
         except Exception as e:
             logging.error(f"Error enviando mensaje al admin: {e}")
 
-        # Limpiar datos de usuario por seguridad
         context.user_data.clear()
         return ConversationHandler.END
 
@@ -336,10 +320,6 @@ async def get_my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Tu ID de Telegram es: `{chat_id}`", parse_mode='Markdown')
 
 async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Maneja los mensajes de texto enviados por el Admin.
-    Si escribe un ID de boleto, muestra las opciones.
-    """
     if update.effective_chat.id != ADMIN_CHAT_ID:
         return
 
@@ -366,11 +346,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await update.message.reply_text(f"No se encontró un pedido activo con el ID: {text}")
 
-async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Maneja los botones que presiona el admin.
-    Borra mensajes antiguos del cliente y envía el nuevo estado.
-    """
+async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     
@@ -378,7 +354,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("⛔ No tienes permisos para realizar esta acción.")
         return
 
-    data = query.data.split('_') # adm_TICKETID_ACCION
+    data = query.data.split('_') 
     if len(data) != 3:
         return
     
@@ -386,7 +362,7 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     action = data[2]
     
     if ticket_id not in pedidos_db:
-        await query.edit_message_text("❌ Este boleto ya no existe en el sistema (posiblemente fue borrado al reiniciar).")
+        await query.edit_message_text("❌ Este boleto ya no existe en el sistema.")
         return
 
     pedido = pedidos_db[ticket_id]
@@ -396,17 +372,14 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     msg_to_client = ""
 
     # 1. LIMPIEZA DE CHAT DEL CLIENTE
-    # Borramos todos los mensajes guardados en 'delete_ids' (Preguntas, Pre-boleto, etc.)
     ids_to_delete = pedido.get('delete_ids', [])
-    
     for msg_id in ids_to_delete:
         try:
             await context.bot.delete_message(chat_id=user_id, message_id=msg_id)
         except Exception as e:
-            # Ignoramos errores si el mensaje ya fue borrado o es muy viejo
             pass
 
-    # 2. ACTUALIZAR ESTADO Y ENVIAR NUEVO MENSAJE
+    # 2. LÓGICA DE ESTADOS
     if action == "recibido":
         pedido['status'] = "Recibido en Lavandería"
         msg_to_client = f"📢 Hola {client_name}, tu orden #{ticket_id} ha sido **RECIBIDA** por nuestros administradores, nos pondremos de acuerdo para la recogida."
@@ -419,19 +392,31 @@ async def admin_button_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         
     elif action == "entregado":
         pedido['status'] = "Entregado al Cliente"
-        msg_to_client = f"🏠 Hola {client_name}, confirmamos que tu orden #{ticket_id} ha sido **ENTREGADA**. ¡Gracias por confiar en Brisa Habanera!"
-        msg_to_admin = f"🏠 Pedido #{ticket_id} marcado como ENTREGADO."
+        # --- CAMBIO: Mensaje de reinicio incluido ---
+        msg_to_client = (
+            f"🏠 Hola {client_name}, confirmamos que tu orden #{ticket_id} ha sido **ENTREGADA**. ¡Gracias por confiar en Brisa Habanera!\n\n"
+            f"Si deseas hacer un nuevo envío, selecciona una zona del menú:"
+        )
+        msg_to_admin = f"🏠 Pedido #{ticket_id} marcado como ENTREGADO y cliente reiniciado."
 
-    # Enviar mensaje al cliente
+    # 3. ENVIAR MENSAJE AL CLIENTE
+    # Si es "Entregado", agregamos el menú de zonas para reiniciar.
+    keyboard_markup = None
+    if action == "entregado":
+        keyboard_markup = get_location_keyboard()
+
     try:
-        # Nota: Al enviar este mensaje, se queda arriba del boleto.
-        await context.bot.send_message(chat_id=user_id, text=msg_to_client, parse_mode='Markdown')
-        response_text = f"{msg_to_admin}\n\n✅ Chat del cliente limpiado y notificado."
+        await context.bot.send_message(
+            chat_id=user_id, 
+            text=msg_to_client, 
+            parse_mode='Markdown',
+            reply_markup=keyboard_markup # Se envía el menú solo si se entregó
+        )
+        response_text = f"{msg_to_admin}\n\n✅ Notificación enviada al cliente."
     except Exception as e:
         logging.error(f"Error enviando notificación al cliente {user_id}: {e}")
-        response_text = f"{msg_to_admin}\n\n❌ Error al enviar mensaje al cliente (quizás bloqueó el bot)."
+        response_text = f"{msg_to_admin}\n\n❌ Error al enviar mensaje al cliente."
 
-    # Actualizar el mensaje del admin
     await query.edit_message_text(text=response_text, parse_mode='Markdown')
 
 
@@ -446,9 +431,19 @@ def main() -> None:
 
     application = Application.builder().token(TOKEN).build()
 
+    # --- CREAR REGEX PARA REINICIAR POR TEXTO ---
+    # Escapamos paréntesis para que no rompan el regex
+    zonas_escaped = [re.escape(z) for z in PRECIO_ZONA.keys()]
+    # Unimos con OR lógico: Zona1|Zona2|Zona3...
+    zonas_pattern = '^(' + '|'.join(zonas_escaped) + ')$'
+
     # --- Manejador de Conversación ---
+    # Agregamos un nuevo entry point: Si el usuario pulsa una zona pero NO está en conversación, llama a 'start'
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            MessageHandler(filters.Regex(zonas_pattern), start) # <--- PERMITE REINICIAR PULSANDO UNA ZONA
+        ],
         states={
             LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, location_selected)],
             SERVICE_TYPE: [CallbackQueryHandler(service_selected)],
@@ -469,7 +464,7 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & filters.Chat(ADMIN_CHAT_ID), admin_text_handler))
     application.add_handler(CallbackQueryHandler(admin_button_handler, pattern='^adm_'))
 
-    # --- Iniciar Bot (Webhook o Polling) ---
+    # --- Iniciar Bot ---
     if os.environ.get("RENDER_EXTERNAL_URL"):
         webhook_url = os.environ.get("RENDER_EXTERNAL_URL") + "/webhook"
         application.bot.set_webhook(url=webhook_url)
